@@ -12,9 +12,8 @@
 //! The `RISC0_DEV_MODE=1` flag enables development mode, and `RUST_LOG=info` configures logging
 //! for better visibility.
 use clap::{Parser, Subcommand};
-use fuel_proving_games_risc0::block_execution_game::{execute_fixture, prove_fixture};
+use fuel_proving_games_risc0::block_execution_game::defaults;
 use fuel_zkvm_primitives_test_fixtures::block_execution_fixtures::fixtures::Fixture;
-use risc0_zkvm::ExecutorEnv;
 
 /// The arguments for the command.
 #[derive(Parser, Debug)]
@@ -25,7 +24,11 @@ struct Args {
 }
 
 #[derive(Subcommand, Debug)]
-#[clap(name = "command", about = "The command to execute", rename_all = "snake_case")]
+#[clap(
+    name = "command",
+    about = "The command to execute",
+    rename_all = "snake_case"
+)]
 enum Command {
     ExecuteFixture {
         #[arg(value_enum)]
@@ -44,12 +47,15 @@ fn main() -> fuel_proving_games_risc0::Result<()> {
 
     let args = Args::parse();
 
-    let env = ExecutorEnv::builder();
-
     match args.command {
         Command::ExecuteFixture { fixture } => {
             tracing::info!("Executing the fixture");
-            let report = execute_fixture(fixture, env)?;
+
+            // Get a GameExecutor with the default executor
+            let executor = defaults::game_executor();
+
+            // Execute the fixture
+            let report = executor.execute_fixture(fixture)?;
             tracing::info!("fixture executed successfully.");
 
             // Record the number of cycles executed.
@@ -57,11 +63,16 @@ fn main() -> fuel_proving_games_risc0::Result<()> {
         }
         Command::ProveFixture { fixture } => {
             tracing::info!("Proving and verifying the fixture");
-            let prove_info = prove_fixture(fixture, env)?;
-            prove_info
-                .receipt
-                .verify(fuel_proving_games_risc0::FUEL_BLOCK_EXECUTION_GAME_RISC0_ID)
-                .map_err(|e| fuel_proving_games_risc0::Error::FailedToVerifyProof(e.to_string()))?;
+
+            // Get a GameProver with the default prover
+            let prover = defaults::game_prover();
+
+            // Prove the fixture
+            let prove_info = prover.prove_fixture(fixture)?;
+
+            // Verify the receipt
+            prover.verify_receipt(&prove_info.receipt)?;
+
             tracing::info!("Fixture proved and verified successfully.");
         }
     }

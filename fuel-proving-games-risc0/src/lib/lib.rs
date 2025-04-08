@@ -1,4 +1,5 @@
 pub mod block_execution_game;
+mod common;
 pub mod decompression_game;
 
 #[derive(thiserror::Error, Debug)]
@@ -8,22 +9,22 @@ pub enum Error {
     FailedToDeserializeInput(#[from] bincode::Error),
     /// This error occurs when the input cannot be written to the prover env
     #[error("failed to write input to environment: `{0}`")]
-    FailedToWriteInputToProverEnv(String),
+    FailedToWriteInputToProverEnv(anyhow::Error),
     /// This error occurs when the prover env cannot be built
     #[error("failed to build prover environment: `{0}`")]
-    FailedToBuildProverEnv(String),
+    FailedToBuildProverEnv(anyhow::Error),
     /// This error occurs when the public outputs from the zkvm cannot be deserialized
     #[error("failed to deserialize public output: `{0}`")]
-    FailedToDeserializePublicOutput(String),
+    FailedToDeserializePublicOutput(anyhow::Error),
     /// This error occurs when the proving game fails to execute
     #[error("failed to execute proving game: `{0}`")]
-    FailedToExecuteProvingGame(String),
+    FailedToExecuteProvingGame(anyhow::Error),
     /// This error occurs when the proving game fails to prove
     #[error("failed to prove proving game: `{0}`")]
-    FailedToProveProvingGame(String),
+    FailedToProveProvingGame(anyhow::Error),
     /// This error occurs when proof verification fails
     #[error("failed to verify proof: `{0}`")]
-    FailedToVerifyProof(String),
+    FailedToVerifyProof(anyhow::Error),
     /// This error occurs when a fault/mismatch is detected
     #[error("FAULT: `{0}`")]
     Fault(String),
@@ -31,4 +32,6 @@ pub enum Error {
 
 pub type Result<T> = core::result::Result<T, Error>;
 
-include!(concat!(env!("OUT_DIR"), "/methods.rs"));
+pub(crate) mod elf {
+    include!(concat!(env!("OUT_DIR"), "/methods.rs"));
+}

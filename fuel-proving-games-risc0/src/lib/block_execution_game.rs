@@ -1,72 +1,64 @@
-use crate::FUEL_BLOCK_EXECUTION_GAME_RISC0_ELF;
-use alloy_sol_types::SolType;
-use fuel_zkvm_primitives_prover::games::block_execution_game::{Input, PublicValuesStruct};
+use crate::common::{GameConfig, GameExecutor, GameProver};
+use crate::elf::{FUEL_BLOCK_EXECUTION_GAME_RISC0_ELF, FUEL_BLOCK_EXECUTION_GAME_RISC0_ID};
 use fuel_zkvm_primitives_test_fixtures::block_execution_fixtures::fixtures::Fixture;
-use risc0_zkvm::{ExecutorEnvBuilder, ProveInfo};
+use risc0_zkvm::{ProveInfo, SessionInfo};
+use std::rc::Rc;
 
-pub fn run_fixture(fixture: Fixture, env: &mut ExecutorEnvBuilder<'_>) -> crate::Result<[u8; 32]> {
-    let raw_input = Fixture::get_input_for_fixture(&fixture);
-    let input: Input =
-        bincode::deserialize(&raw_input).map_err(crate::Error::FailedToDeserializeInput)?;
-    let block_id = input.block.header().id().into();
-    env.write(&raw_input)
-        .map_err(|e| crate::Error::FailedToWriteInputToProverEnv(e.to_string()))?;
+/// Configuration for the Block Execution Game
+#[derive(Debug, Clone)]
+pub struct BlockExecutionGame;
 
-    Ok(block_id)
-}
+impl GameConfig for BlockExecutionGame {
+    type Fixture = Fixture;
 
-pub fn execute_fixture(
-    fixture: Fixture,
-    mut env: ExecutorEnvBuilder<'_>,
-) -> crate::Result<risc0_zkvm::SessionInfo> {
-    let _ = run_fixture(fixture, &mut env)?;
-
-    let executor = risc0_zkvm::default_executor();
-    let env = env.build().map_err(|e| crate::Error::FailedToBuildProverEnv(e.to_string()))?;
-    let executor_info = executor
-        .execute(env, FUEL_BLOCK_EXECUTION_GAME_RISC0_ELF)
-        .map_err(|e| crate::Error::FailedToExecuteProvingGame(e.to_string()))?;
-
-    Ok(executor_info)
-}
-
-pub fn prove_fixture(
-    fixture: Fixture,
-    mut env: ExecutorEnvBuilder<'_>,
-) -> crate::Result<ProveInfo> {
-    let block_id = run_fixture(fixture, &mut env)?;
-
-    let prover = risc0_zkvm::default_prover();
-    let env = env.build().map_err(|e| crate::Error::FailedToBuildProverEnv(e.to_string()))?;
-    let prove_info = prover
-        .prove(env, FUEL_BLOCK_EXECUTION_GAME_RISC0_ELF)
-        .map_err(|e| crate::Error::FailedToProveProvingGame(e.to_string()))?;
-    let output: Vec<u8> = prove_info
-        .receipt
-        .journal
-        .decode()
-        .map_err(|e| crate::Error::FailedToDeserializePublicOutput(e.to_string()))?;
-
-    let decoded_output = PublicValuesStruct::abi_decode(&output, true)
-        .map_err(|e| crate::Error::FailedToDeserializePublicOutput(e.to_string()))?;
-
-    let output_block_id = decoded_output.block_id.to_be_bytes();
-    if output_block_id != block_id {
-        return Err(crate::Error::Fault(format!(
-            "Block ID mismatch: expected {:?}, got {:?}",
-            block_id, output_block_id
-        )));
+    fn elf() -> &'static [u8] {
+        FUEL_BLOCK_EXECUTION_GAME_RISC0_ELF
     }
 
-    Ok(prove_info)
+    fn id() -> &'static [u32; 8] {
+        &FUEL_BLOCK_EXECUTION_GAME_RISC0_ID
+    }
+
+    fn get_fixture_input(fixture: &Self::Fixture) -> impl serde::Serialize {
+        Fixture::get_input_for_fixture(fixture)
+    }
+}
+
+/// Type alias for Block Execution Game Prover
+pub type BlockExecutionProver<P> = GameProver<P, BlockExecutionGame>;
+
+/// Type alias for Block Execution Game Executor
+pub type BlockExecutionExecutor<E> = GameExecutor<E, BlockExecutionGame>;
+
+/// Convenience functions for working with the default prover and executor
+pub mod defaults {
+    use super::*;
+
+    /// Get a BlockExecutionProver with the default RISC-0 prover
+    pub fn game_prover() -> BlockExecutionProver<Rc<dyn risc0_zkvm::Prover>> {
+        BlockExecutionProver::new(risc0_zkvm::default_prover())
+    }
+
+    /// Get a BlockExecutionExecutor with the default RISC-0 executor
+    pub fn game_executor() -> BlockExecutionExecutor<Rc<dyn risc0_zkvm::Executor>> {
+        BlockExecutionExecutor::new(risc0_zkvm::default_executor())
+    }
+
+    /// Prove a fixture with the default prover
+    pub fn prove_fixture(fixture: Fixture) -> crate::Result<ProveInfo> {
+        game_prover().prove_fixture(fixture)
+    }
+
+    /// Execute a fixture with the default executor
+    pub fn execute_fixture(fixture: Fixture) -> crate::Result<SessionInfo> {
+        game_executor().execute_fixture(fixture)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::FUEL_BLOCK_EXECUTION_GAME_RISC0_ID;
-    use csv::WriterBuilder;
-    use fuel_zkvm_primitives_test_fixtures::block_execution_fixtures::fixtures::all_fixtures;
+    use crate::common::create_csv_writer;
     use serde::Serialize;
 
     #[derive(Serialize)]
@@ -84,60 +76,55 @@ mod tests {
 
     #[test]
     fn run_all_fixtures_and_collect_report() {
-        let fixtures = all_fixtures();
+        let fixtures =
+            fuel_zkvm_primitives_test_fixtures::block_execution_fixtures::fixtures::all_fixtures();
+        let mut wtr = create_csv_writer("FUEL_RISC0_REPORT", "fuel_risc0_report.csv");
 
-        let file_path =
-            std::env::var("FUEL_RISC0_REPORT").unwrap_or("fuel_risc0_report.csv".to_string());
-        let mut wtr = WriterBuilder::new()
-            .flexible(true)
-            .from_path(file_path)
-            .expect("Couldn't create CSV writer");
+        // Create a reusable executor
+        let executor = defaults::game_executor();
 
         for fixture in fixtures {
-            let env = ExecutorEnvBuilder::default();
-            let executor_info = execute_fixture(fixture.clone(), env).unwrap();
+            // Execute the fixture with the new API
+            let executor_info = executor.execute_fixture(fixture.clone()).unwrap();
 
-            let report =
-                ExecutionReport { fixture: fixture.clone(), cycle_count: executor_info.cycles() };
+            let report = ExecutionReport {
+                fixture: fixture.clone(),
+                cycle_count: executor_info.cycles(),
+            };
 
             wtr.serialize(report).expect("Couldn't write report to CSV");
-
-            // Flush the CSV writer to ensure the report is written to disk.
             wtr.flush().expect("Couldn't flush CSV writer");
         }
     }
 
     #[test]
     fn prove_all_fixtures_and_collect_report() {
-        let fixtures = all_fixtures();
+        let fixtures =
+            fuel_zkvm_primitives_test_fixtures::block_execution_fixtures::fixtures::all_fixtures();
+        let mut wtr = create_csv_writer("FUEL_RISC0_REPORT", "fuel_risc0_report.csv");
 
-        let file_path =
-            std::env::var("FUEL_RISC0_REPORT").unwrap_or("fuel_risc0_report.csv".to_string());
-        let mut wtr = WriterBuilder::new()
-            .flexible(true)
-            .from_path(file_path)
-            .expect("Couldn't create CSV writer");
+        // Create a reusable prover
+        let prover = defaults::game_prover();
 
         for fixture in fixtures {
-            let env = ExecutorEnvBuilder::default();
-
+            // Prove the fixture with the new API
             let start_time = std::time::Instant::now();
-            let prove_info = prove_fixture(fixture.clone(), env).unwrap();
+            let prove_info = prover.prove_fixture(fixture.clone()).unwrap();
             let proving_time = start_time.elapsed().as_millis();
 
             let start_time = std::time::Instant::now();
-            prove_info
-                .receipt
-                .verify(FUEL_BLOCK_EXECUTION_GAME_RISC0_ID)
+            prover
+                .verify_receipt(&prove_info.receipt)
                 .expect("Proof verification failed.");
             let verification_time = start_time.elapsed().as_millis();
 
-            let report =
-                ProvingReport { fixture: fixture.clone(), proving_time, verification_time };
+            let report = ProvingReport {
+                fixture: fixture.clone(),
+                proving_time,
+                verification_time,
+            };
 
             wtr.serialize(report).expect("Couldn't write report to CSV");
-
-            // Flush the CSV writer to ensure the report is written to disk.
             wtr.flush().expect("Couldn't flush CSV writer");
         }
     }
